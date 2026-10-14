@@ -15,18 +15,29 @@ class GenerationResult:
     sql: str = ""
     raw_output: str = ""
     inference_time_ms: float = 0.0
+    adapter_active: bool | None = None
     error: str | None = None
+
 
 
 class ColabSQLClient:
     """Talks to `colab/server.py` through its ngrok URL."""
 
     # Free ngrok domains serve an interstitial page to non-browser clients.
-    HEADERS: ClassVar[dict[str, str]] = {"ngrok-skip-browser-warning": "1"}
+    DEFAULT_HEADERS: ClassVar[dict[str, str]] = {"ngrok-skip-browser-warning": "1"}
 
-    def __init__(self, api_url: str | None = None, timeout: int = 120):
-        self.api_url = (api_url or config.COLAB_API_URL).rstrip("/")
+    def __init__(self, api_url: str | None = None, api_key: str | None = None, timeout: int = 120):
+        self.api_url = (api_url if api_url is not None else config.COLAB_API_URL).rstrip("/")
+        self.api_key = api_key if api_key is not None else config.API_KEY
         self.timeout = timeout
+
+
+    @property
+    def headers(self) -> dict[str, str]:
+        h = dict(self.DEFAULT_HEADERS)
+        if self.api_key:
+            h["X-API-Key"] = self.api_key
+        return h
 
     def is_configured(self) -> bool:
         return self.api_url.startswith("http")
@@ -35,7 +46,7 @@ class ColabSQLClient:
         if not self.is_configured():
             return {"status": "unconfigured", "error": "COLAB_API_URL is not set"}
         try:
-            resp = requests.get(f"{self.api_url}/health", headers=self.HEADERS, timeout=10)
+            resp = requests.get(f"{self.api_url}/health", headers=self.headers, timeout=10)
         except requests.RequestException as exc:
             return {"status": "unreachable", "error": str(exc)}
         if resp.status_code == 200:
@@ -62,7 +73,7 @@ class ColabSQLClient:
         }
         try:
             resp = requests.post(
-                f"{self.api_url}/generate_sql", json=payload, headers=self.HEADERS, timeout=self.timeout
+                f"{self.api_url}/generate_sql", json=payload, headers=self.headers, timeout=self.timeout
             )
         except requests.Timeout:
             return GenerationResult(error=f"Request timed out after {self.timeout}s.")
@@ -76,4 +87,6 @@ class ColabSQLClient:
             sql=data.get("sql", "").strip(),
             raw_output=data.get("raw_output", ""),
             inference_time_ms=data.get("inference_time_ms", 0.0),
+            adapter_active=data.get("adapter_active"),
         )
+

@@ -10,8 +10,11 @@ Design Principles:
 
 from dataclasses import dataclass
 
+BENCHMARK_VERSION: str = "v2"
+
 
 @dataclass(frozen=True)
+
 class BenchmarkItem:
     id: int
     category: str

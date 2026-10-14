@@ -16,6 +16,9 @@ wheels/
 # Node
 node_modules/
 .next/
-colab
-data
+
+# Data & Models (ignore database binary and cache, allow eval jsons)
+data/*
 .agents
+colab
+tests

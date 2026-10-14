@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from sql_llm import config
-from sql_llm.benchmark_dataset import CHINOOK_BENCHMARK
+from sql_llm.benchmark_dataset import BENCHMARK_VERSION, CHINOOK_BENCHMARK
 from sql_llm.client import ColabSQLClient
 from sql_llm.database import SQLiteDatabase
 from sql_llm.schema_builder import SchemaMode, build_schema
@@ -46,12 +46,15 @@ class EvalRecord:
     error: str | None
     latency_ms: float
     failure_type: str | None
+    adapter_active: bool | None = None
 
 
 @dataclass
 class EvalSummary:
+    benchmark_version: str
     total_questions: int
     use_adapter: bool
+    adapter_active: bool | None
     schema_mode: str
     strict_accuracy: float
     lenient_accuracy: float
@@ -61,6 +64,8 @@ class EvalSummary:
     avg_latency_ms: float
     difficulty_breakdown: dict[str, dict[str, float]]
     category_breakdown: dict[str, dict[str, float]]
+
+
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> list[float]:
@@ -167,6 +172,19 @@ def run_evaluation(
         )
         total_time += report.inference_time_ms
 
+        # Adapter Guard: prevent evaluating base model when server ran with LoRA active
+        if not use_adapter and report.adapter_active is True:
+            raise RuntimeError(
+                f"Adapter guard triggered: evaluation was run with use_adapter=False, but remote server "
+                f"returned adapter_active=True on question ID {item.id}. Aborting run to prevent corrupting benchmark."
+            )
+        if not use_adapter and report.adapter_active is None:
+            raise RuntimeError(
+                f"Adapter guard triggered: evaluation was run with use_adapter=False, but remote server "
+                f"did not return 'adapter_active' on question ID {item.id} (old server version running). "
+                f"Please restart the Colab server with the updated colab/server.py."
+            )
+
         pred_sql = report.generated_sql
         is_valid = bool(report.execution_result and report.execution_result.success)
         strict_m = False
@@ -213,6 +231,7 @@ def run_evaluation(
                 error=report.generation_error or (report.execution_result.error if report.execution_result else None),
                 latency_ms=report.inference_time_ms,
                 failure_type=failure,
+                adapter_active=report.adapter_active,
             )
         )
 
@@ -249,9 +268,13 @@ def run_evaluation(
             "lenient_accuracy": round((cat_lenient / len(group)) * 100.0, 1),
         }
 
+    overall_adapter_active = records[0].adapter_active if records else None
+
     summary = EvalSummary(
+        benchmark_version=BENCHMARK_VERSION,
         total_questions=total,
         use_adapter=use_adapter,
+        adapter_active=overall_adapter_active,
         schema_mode=schema_mode,
         strict_accuracy=strict_acc,
         lenient_accuracy=lenient_acc,
@@ -263,14 +286,16 @@ def run_evaluation(
         category_breakdown=cat_stats,
     )
 
+
     # Display Rich Table
     table = Table(
-        title=f"Chinook Evaluation ({model_label} - Schema: {schema_mode})",
+        title=f"Chinook Evaluation {BENCHMARK_VERSION} ({model_label} - Schema: {schema_mode})",
         header_style="bold magenta",
     )
     table.add_column("Metric", style="cyan")
     table.add_column("Result", justify="right", style="green")
 
+    table.add_row("Benchmark Version", BENCHMARK_VERSION)
     table.add_row("Total Questions", str(total))
     table.add_row("Strict Execution Accuracy", f"{strict_acc}% (95% CI: [{ci_strict[0]}%, {ci_strict[1]}%])")
     table.add_row("Lenient Execution Accuracy", f"{lenient_acc}% (95% CI: [{ci_lenient[0]}%, {ci_lenient[1]}%])")
@@ -282,6 +307,7 @@ def run_evaluation(
         out_file = Path(output_path)
         out_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "benchmark_version": BENCHMARK_VERSION,
             "summary": asdict(summary),
             "records": [asdict(r) for r in records],
         }

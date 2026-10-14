@@ -21,6 +21,8 @@ class TextToSQLReport:
     execution_result: QueryResult | None
     success: bool
     summary: str
+    adapter_active: bool | None = None
+
 
 
 def _normalize_cell(v: Any) -> Any:
@@ -128,7 +130,14 @@ class TextToSQLService:
         if gen.error or not gen.sql:
             error = gen.error or "Model returned an empty query."
             return TextToSQLReport(
-                question, "", error, gen.inference_time_ms, None, False, f"Generation failed: {error}"
+                question,
+                "",
+                error,
+                gen.inference_time_ms,
+                None,
+                False,
+                f"Generation failed: {error}",
+                adapter_active=gen.adapter_active,
             )
 
         result = self.db.execute_query(gen.sql, max_rows=max_result_rows)
@@ -138,5 +147,13 @@ class TextToSQLService:
             else f"Generated SQL failed: {result.error}"
         )
         return TextToSQLReport(
-            question, gen.sql, None, gen.inference_time_ms, result, result.success, summary
+            question,
+            gen.sql,
+            None,
+            gen.inference_time_ms,
+            result,
+            result.success,
+            summary,
+            adapter_active=gen.adapter_active,
         )
+

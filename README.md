@@ -11,15 +11,17 @@ To ensure rigorous evaluation, metrics are separated into two distinct, unmixed 
 ### 1. In-Distribution Held-Out Test Set (Gretel Synthetic, $n=200$)
 Evaluated on 200 held-out prompts from `gretelai/synthetic_text_to_sql` (SQLite dialect):
 
-| Model Configuration | Valid SQL Rate | Execution Accuracy | Notes |
-|---|---|---|---|
-| **Base Model (`Qwen2.5-Coder-3B-Instruct`)** | 89.5% | 57.0% | Zero-shot prompting |
-| **Fine-Tuned Adapter (LoRA $r=16$)** | **97.5%** (+8.0%) | **69.5%** (+12.5%) | 1 epoch, 6,330 gold pairs |
+| Model Configuration | Valid SQL Rate | Execution Accuracy | 95% Wilson Confidence Interval | Notes |
+|---|---|---|---|---|
+| **Base Model (`Qwen2.5-Coder-3B-Instruct`)** | 89.5% | 57.0% | [50.1%, 63.7%] | Zero-shot prompting |
+| **Fine-Tuned Adapter (LoRA $r=16$)** | **97.5%** (+8.0%) | **69.5%** (+12.5%) | [62.8%, 75.5%] | 1 epoch, 6,330 gold pairs |
 
 ---
 
-### 2. Chinook Database Benchmark ($n=40$, Sample Database)
+### 2. Chinook Database Benchmark v2 ($n=40$, Sample Database)
 Evaluated on a curated, quality-gated suite of 40 questions spanning single-table queries, aggregations, 2-to-4-table JOINs, and subqueries against `data/Chinook_Sqlite.sqlite` (sample database, not in the fine-tuning data; $n=40$, 95% Wilson CI $\pm \sim 13$ points).
+
+> **Benchmark Version Notice:** Benchmark v1 (which produced 57.5%) was revised after the first run to eliminate invalid evaluation artifacts (such as empty result sets, arbitrary `LIMIT` clauses without `ORDER BY`, and untied boundary sort keys). The current canonical benchmark is **Benchmark v2** (`BENCHMARK_VERSION="v2"`), and v1 results are not comparable.
 
 All 40 questions pass strict automated quality validation (`scripts/validate_benchmark.py`), ensuring complete determinism, absence of ties at LIMIT boundaries, and unambiguous column contracts.
 
@@ -28,27 +30,32 @@ All 40 questions pass strict automated quality validation (`scripts/validate_ben
 |---|---|---|---|
 | **Strict Execution Accuracy** | **77.5%** (31 / 40) | **[62.5%, 87.7%]** | Exact columns, exact positions, result match |
 | **Lenient Execution Accuracy** | **77.5%** (31 / 40) | **[62.5%, 87.7%]** | Permuted / superset column acceptance |
-| **Valid SQL Rate** | **85.0%** (34 / 40) | — | Syntactically correct & executable by SQLite |
+| **Valid SQL Rate** | **85.0%** (34 / 40) | **[70.9%, 93.3%]** | Syntactically correct & executable by SQLite |
 | **End-to-End Latency** | **3.80 s** | — | End-to-end latency via ngrok (Colab T4 GPU) |
 
 #### Difficulty Breakdown ($n=40$)
+Difficulty counts strictly reflect the canonical benchmark definitions:
+
 | Difficulty | Questions | Strict Match Count | Strict Accuracy | Lenient Accuracy |
 |---|---|---|---|---|
 | **Easy** | 8 | 8 | **100.0%** | 100.0% |
-| **Medium** | 18 | 14 | **77.8%** | 77.8% |
-| **Hard** (Multi-Table JOINs / Subqueries) | 14 | 9 | **64.3%** | 64.3% |
+| **Medium** | 19 | 16 | **84.2%** | 84.2% |
+| **Hard** (Multi-Table JOINs / Subqueries) | 13 | 7 | **53.8%** | 53.8% |
+| **Total** | 40 | 31 | **77.5%** | 77.5% |
 
 #### Category Breakdown
-| Category | Questions | Strict Accuracy | Key Patterns Tested |
-|---|---|---|---|
-| **Single-Table Aggregations** | 7 | **100.0%** | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
-| **Filter & Sort** | 9 | **100.0%** | `WHERE`, `ORDER BY`, `LIMIT` |
-| **Grouping & Having** | 1 | **100.0%** | `GROUP BY ... HAVING COUNT(*) > 5` |
-| **2-Table JOINs** | 8 | **75.0%** | `Artist ⇄ Album`, `Genre ⇄ Track`, `Invoice ⇄ Customer` |
-| **Multi-Table JOINs (3–4 Tables)** | 10 | **70.0%** | `Invoice ⇄ InvoiceLine ⇄ Track ⇄ Album ⇄ Artist` |
-| **Date & Time Operations** | 2 | **50.0%** | Year extraction and date filtering |
-| **Subqueries & CTEs** | 2 | **50.0%** | Correlated / uncorrelated subqueries |
-| **Self-Join & Hierarchy** | 1 | **0.0%** | Employee-to-manager recursive join |
+*(Per evaluation standards, categories with $n < 5$ report exact counts $k/n$ without misleading pseudo-precise percentages.)*
+
+| Category | Total Questions ($n$) | Strict Match ($k/n$) | Strict Accuracy | Key Patterns Tested |
+|---|---|---|---|---|
+| **Single-Table Aggregations** | 7 | 7 / 7 | **100.0%** | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
+| **Filter & Sort** | 9 | 9 / 9 | **100.0%** | `WHERE`, `ORDER BY`, `LIMIT` |
+| **2-Table JOINs** | 8 | 6 / 8 | **75.0%** | `Artist ⇄ Album`, `Genre ⇄ Track`, `Invoice ⇄ Customer` |
+| **Multi-Table JOINs (3–4 Tables)** | 10 | 6 / 10 | **60.0%** | `Invoice ⇄ InvoiceLine ⇄ Track ⇄ Album ⇄ Artist` |
+| **Date & Time Operations** | 2 | 1 / 2 | — *(n < 5)* | Year extraction (`strftime`) and date filtering |
+| **Subqueries & CTEs** | 2 | 1 / 2 | — *(n < 5)* | Correlated / uncorrelated subqueries |
+| **Grouping & Having** | 1 | 1 / 1 | — *(n < 5)* | `GROUP BY ... HAVING COUNT(*) > 5` |
+| **Self-Join & Hierarchy** | 1 | 0 / 1 | — *(n < 5)* | Employee-to-manager hierarchical join |
 
 ---
 
@@ -59,13 +66,20 @@ We evaluated the fine-tuned model under three schema representation strategies:
 - **Config B (`linked`):** Only tables relevant to the question (max 4, scored by keyword overlap and CamelCase split, plus foreign key neighbors), formatted as compact DDL (`CREATE TABLE Artist (ArtistId INTEGER, Name TEXT);` without noise).
 - **Config C (`linked_rows`):** Config B + 2 sample rows per table formatted as `INSERT INTO Table VALUES (...);`.
 
-| Schema Mode | Strict Accuracy | Lenient Accuracy | Valid SQL Rate | Avg End-to-End Latency (ngrok) |
+| Schema Mode | Strict Accuracy (95% CI) | Lenient Accuracy | Valid SQL Rate | Avg End-to-End Latency (ngrok) |
 |---|---|---|---|---|
-| **Config A (`full`)** | **77.5%** (31/40) | 77.5% | 85.0% | 3.80 s |
-| **Config B (`linked`)** | 70.0% (28/40) | 70.0% | 90.0% | 3.62 s |
-| **Config C (`linked_rows`)** | **77.5%** (31/40) | 77.5% | **95.0%** | **3.59 s** |
+| **Config A (`full`)** | **77.5%** [62.5%, 87.7%] (31/40) | 77.5% | 85.0% | 3.80 s |
+| **Config B (`linked`)** | 70.0% [54.6%, 81.9%] (28/40) | 70.0% | 90.0% | 3.62 s |
+| **Config C (`linked_rows`)** | **77.5%** [62.5%, 87.7%] (31/40) | 77.5% | **95.0%** | **3.59 s** |
 
-> **Ablation Finding:** Adding 2 sample rows per table (Config C) reduced prompt token count while boosting Valid SQL Rate to **95.0%** (vs 85.0% in full schema) and tying Full Schema in Strict Execution Accuracy at **77.5%** with the lowest latency (3.59s).
+> **Statistical Significance Note:** Differences across all three ablation configurations (in execution accuracy, valid SQL rate, and latency) are **not statistically significant** at $n=40$ using McNemar's exact two-tailed binomial test:
+> - Config A vs Config B: $b=6, c=3, p = 0.5078$ ($\ge 0.05$)
+> - Config A vs Config C: $b=3, c=3, p = 1.0000$ ($\ge 0.05$)
+> - Config B vs Config C: $b=0, c=3, p = 0.2500$ ($\ge 0.05$)
+> 
+> At $n=40$, observed variations in latency and valid SQL rate cannot be claimed as statistically meaningful improvements or efficiencies; a larger sample size ($n \ge 200$) is required to detect small effect sizes.
+
+
 
 ---
 
