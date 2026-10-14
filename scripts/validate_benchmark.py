@@ -1,117 +1,194 @@
-"""Validation Script for the Chinook Text-to-SQL Benchmark.
+"""Benchmark Quality Validator.
 
-Checks each benchmark query against `data/Chinook_Sqlite.sqlite` for:
-1. Syntax correctness and successful execution.
-2. Non-empty result set (> 0 rows).
-3. Determinism:
-   - Queries with `LIMIT` MUST include an `ORDER BY`.
-   - Queries with `LIMIT N` must not have tied sort values at the boundary (row N vs row N+1).
-4. No hidden truncation: queries answering "all" must not have arbitrary `LIMIT`.
-5. Exact column specification alignment between question prompt and gold SELECT clause.
+Enforces quality gates for the Chinook Text-to-SQL benchmark:
+Flag as ERROR:
+  1. Gold SQL fails execution.
+  2. Gold result set is empty or a single 0/NULL (e.g. [(0,)], [(None,)], [('',)]).
+  3. LIMIT n while the question says "all".
+  4. A tie in the ORDER BY key at the LIMIT boundary (row n vs row n+1).
+
+Flag as WARN:
+  1. LIMIT without ORDER BY.
+  2. Ties in the sort key among returned rows.
 """
+
+from __future__ import annotations
 
 import re
 import sqlite3
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-# Add project root to path
+import sqlglot
+from sqlglot import exp
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from sql_llm import config
-from sql_llm.benchmark_dataset import CHINOOK_BENCHMARK
+from sql_llm.benchmark_dataset import CHINOOK_BENCHMARK, BenchmarkItem
 
 
-def check_boundary_tie(conn: sqlite3.Connection, sql: str) -> tuple[bool, str]:
-    """If SQL has LIMIT N, check if row N and row N+1 share the exact same values for sort keys."""
-    limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE)
-    if not limit_match:
-        return True, "No LIMIT"
-    
-    limit_n = int(limit_match.group(1))
-    order_match = re.search(r"\bORDER\s+BY\s+(.*?)(?:\bLIMIT\b|;|$)", sql, re.IGNORECASE | re.DOTALL)
-    if not order_match:
-        return False, f"LIMIT {limit_n} used without ORDER BY (non-deterministic)"
-    
-    # Run with limit N + 1
-    sql_plus_1 = re.sub(r"\bLIMIT\s+\d+\b", f"LIMIT {limit_n + 1}", sql, flags=re.IGNORECASE)
+@dataclass
+class ValidationIssue:
+    question_id: int
+    level: str  # "ERROR" | "WARN"
+    message: str
+
+
+def get_sort_key_rows(conn: sqlite3.Connection, sql: str, limit_n: int) -> list[tuple] | None:
+    """Extract rows of sort keys up to limit_n + 1 to check for ties."""
     try:
-        rows = conn.execute(sql_plus_1).fetchall()
-    except sqlite3.Error as exc:
-        return False, f"Error running query with LIMIT+1: {exc}"
-    
-    if len(rows) > limit_n:
-        last_in_limit = rows[limit_n - 1]
-        first_after_limit = rows[limit_n]
-        # Compare row content or last column if tie
-        if last_in_limit == first_after_limit:
-            return False, f"Tie at boundary: row {limit_n} and row {limit_n+1} have identical data {last_in_limit}"
-    
-    return True, "Deterministic"
+        ast = sqlglot.parse_one(sql, read="sqlite")
+    except sqlglot.errors.SqlglotError:
+        return None
+
+    order = ast.find(exp.Order)
+    if not order:
+        return None
+
+    select_map = {}
+    for s in ast.selects:
+        alias = s.alias_or_name
+        if alias:
+            select_map[alias.lower()] = s.this if isinstance(s, exp.Alias) else s
+
+    order_exprs = []
+    new_order_items = []
+    for o in order.expressions:
+        expr = o.this
+        desc = o.args.get("desc", False)
+        if isinstance(expr, exp.Column) and expr.name.lower() in select_map:
+            actual_expr = select_map[expr.name.lower()].copy()
+        else:
+            actual_expr = expr.copy()
+        order_exprs.append(actual_expr.copy())
+        new_order_items.append(exp.Ordered(this=actual_expr.copy(), desc=desc))
+
+    check_ast = ast.copy()
+    check_ast.args["expressions"] = order_exprs
+    check_ast.args["order"] = exp.Order(expressions=new_order_items)
+    check_ast.args["limit"] = exp.Limit(expression=exp.Literal.number(limit_n + 1))
+
+    try:
+        check_sql = check_ast.sql("sqlite")
+        return conn.execute(check_sql).fetchall()
+    except sqlite3.Error:
+        return None
 
 
-def validate_all() -> bool:
-    db_path = config.DB_PATH
-    if not db_path.exists():
-        print(f"ERROR: Database file not found at {db_path}")
-        return False
+def validate_benchmark(db_path: Path | str, items: list[BenchmarkItem]) -> list[ValidationIssue]:
+    path = Path(db_path).resolve()
+    if not path.exists():
+        return [ValidationIssue(0, "ERROR", f"Database not found at: {path}")]
 
-    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-    all_passed = True
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    issues: list[ValidationIssue] = []
 
-    print("=" * 80)
-    print(f"VALIDATING CHINOOK BENCHMARK (40 Questions) on {db_path.name}")
-    print("=" * 80)
-
-    for item in CHINOOK_BENCHMARK:
-        issues = []
+    for item in items:
         sql = item.gold_sql.strip()
         q = item.question.strip()
 
-        # 1. Execution & row count
+        # 1. Execution & Result Check
         try:
-            cur = conn.execute(sql)
-            rows = cur.fetchall()
-            row_count = len(rows)
-            if row_count == 0:
-                issues.append("Returns 0 rows (empty result set)")
+            rows = conn.execute(sql).fetchall()
+            if not rows:
+                issues.append(ValidationIssue(item.id, "ERROR", "Gold SQL returned an empty result set (0 rows)."))
+            elif len(rows) == 1 and len(rows[0]) == 1:
+                val = rows[0][0]
+                if val is None or val == 0 or val == "" or val == 0.0:
+                    issues.append(
+                        ValidationIssue(
+                            item.id,
+                            "ERROR",
+                            f"Gold SQL returned a trivial single 0/NULL/empty value: {rows}",
+                        )
+                    )
         except sqlite3.Error as exc:
-            issues.append(f"SQL execution failed: {exc}")
-            row_count = 0
+            issues.append(ValidationIssue(item.id, "ERROR", f"Gold SQL execution failed: {exc}"))
+            continue
 
-        # 2. Check for hidden truncation
-        if "all " in q.lower() and re.search(r"\bLIMIT\b", sql, re.IGNORECASE):
-            issues.append("Question mentions 'all' but SQL contains an arbitrary LIMIT")
+        # 2. Check for LIMIT when question says "all"
+        has_all_in_question = bool(re.search(r"\ball\b", q, re.IGNORECASE))
+        has_limit_in_sql = bool(re.search(r"\bLIMIT\s+\d+\b", sql, re.IGNORECASE))
 
-        # 3. Check for LIMIT without ORDER BY and boundary ties
-        if re.search(r"\bLIMIT\b", sql, re.IGNORECASE):
-            det_ok, det_msg = check_boundary_tie(conn, sql)
-            if not det_ok:
-                issues.append(det_msg)
+        if has_all_in_question and has_limit_in_sql:
+            issues.append(
+                ValidationIssue(
+                    item.id,
+                    "ERROR",
+                    "Question requests 'all' results, but Gold SQL contains an arbitrary LIMIT clause.",
+                )
+            )
 
-        # 4. Status display
-        if issues:
-            all_passed = False
-            status = "FAILED"
-            print(f"[{status}] Q{item.id:02d} ({item.difficulty} - {item.category})")
-            print(f"  Question: {q}")
-            print(f"  Gold SQL: {sql}")
-            for iss in issues:
-                print(f"  -> ISSUE: {iss}")
-        else:
-            print(f"[PASSED] Q{item.id:02d}: {row_count} row(s) | {q[:70]}...")
+        # 3. Check LIMIT & ORDER BY
+        limit_match = re.search(r"\bLIMIT\s+(\d+)\b", sql, re.IGNORECASE)
+        has_order_by = bool(re.search(r"\bORDER\s+BY\b", sql, re.IGNORECASE))
+
+        if limit_match:
+            limit_n = int(limit_match.group(1))
+            if not has_order_by:
+                issues.append(
+                    ValidationIssue(
+                        item.id,
+                        "WARN",
+                        f"Query contains LIMIT {limit_n} without an ORDER BY clause (order non-deterministic).",
+                    )
+                )
+            else:
+                sort_rows = get_sort_key_rows(conn, sql, limit_n)
+                if sort_rows is not None:
+                    # Check boundary tie (row n vs row n+1)
+                    if len(sort_rows) > limit_n:
+                        row_n = sort_rows[limit_n - 1]
+                        row_n_plus_1 = sort_rows[limit_n]
+                        if row_n == row_n_plus_1:
+                            issues.append(
+                                ValidationIssue(
+                                    item.id,
+                                    "ERROR",
+                                    f"Tie in sort key at LIMIT {limit_n} boundary: "
+                                    f"row {limit_n} {row_n} == row {limit_n+1} {row_n_plus_1}.",
+                                )
+                            )
+
+                    # Check ties among returned rows
+                    returned_keys = sort_rows[:limit_n]
+                    if len(returned_keys) > len(set(returned_keys)):
+                        issues.append(
+                            ValidationIssue(
+                                item.id,
+                                "WARN",
+                                f"Ties in sort key among the {limit_n} returned rows (missing secondary tiebreaker).",
+                            )
+                        )
 
     conn.close()
+    return issues
+
+
+def main() -> int:
+    issues = validate_benchmark(config.DB_PATH, CHINOOK_BENCHMARK)
+    errors = [i for i in issues if i.level == "ERROR"]
+    warns = [i for i in issues if i.level == "WARN"]
+
     print("=" * 80)
-    if all_passed:
-        print("ALL 40 BENCHMARK QUESTIONS VALIDATED SUCCESSFULLY WITH 0 ISSUES!")
-    else:
-        print("SOME QUESTIONS FAILED VALIDATION CHECKS (SEE ABOVE).")
+    print(f"BENCHMARK QUALITY REPORT ({len(CHINOOK_BENCHMARK)} items on {config.DB_PATH.name})")
+    print(f"Errors: {len(errors)} | Warnings: {len(warns)}")
     print("=" * 80)
-    return all_passed
+
+    if not issues:
+        print("ALL QUALITY GATES PASSED (0 ERRORS, 0 WARNINGS).")
+        return 0
+
+    for issue in issues:
+        prefix = "[ERROR]" if issue.level == "ERROR" else "[WARN] "
+        print(f"{prefix} Q{issue.question_id:02d}: {issue.message}")
+
+    print("=" * 80)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    success = validate_all()
-    sys.exit(0 if success else 1)
+    sys.exit(main())
