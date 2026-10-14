@@ -43,7 +43,12 @@ class ColabSQLClient:
         return {"status": "error", "code": resp.status_code, "text": resp.text}
 
     def generate_sql(
-        self, schema_sql: str, question: str, temperature: float = 0.1, max_new_tokens: int = 256
+        self,
+        schema_sql: str,
+        question: str,
+        use_adapter: bool = True,
+        temperature: float = 0.1,
+        max_new_tokens: int = 256,
     ) -> GenerationResult:
         if not self.is_configured():
             return GenerationResult(error="COLAB_API_URL is not configured.")
@@ -51,6 +56,7 @@ class ColabSQLClient:
         payload = {
             "schema_sql": schema_sql,
             "question": question,
+            "use_adapter": use_adapter,
             "temperature": temperature,
             "max_new_tokens": max_new_tokens,
         }
