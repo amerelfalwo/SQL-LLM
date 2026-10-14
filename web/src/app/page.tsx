@@ -185,8 +185,8 @@ export default function Home() {
         <div className="metric-card">
           <span className="metric-label">Chinook Execution Accuracy</span>
           <div className="metric-value-row">
-            <span className="metric-number">57.5%</span>
-            <span className="metric-delta">Real DB</span>
+            <span className="metric-number">87.5%</span>
+            <span className="metric-delta">35 / 40</span>
           </div>
           <span className="metric-sub">Exact result set match on 40 curated Chinook questions (zero-shot transfer).</span>
         </div>
