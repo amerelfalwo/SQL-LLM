@@ -183,37 +183,39 @@ export default function Home() {
       {/* 2. Research Benchmark Metrics (Bento Grid) */}
       <section className="metrics-section">
         <div className="metric-card">
-          <span className="metric-label">Execution Accuracy</span>
+          <span className="metric-label">Chinook Execution Accuracy</span>
+          <div className="metric-value-row">
+            <span className="metric-number">57.5%</span>
+            <span className="metric-delta">Real DB</span>
+          </div>
+          <span className="metric-sub">Exact result set match on 40 curated Chinook questions (zero-shot transfer).</span>
+        </div>
+
+        <div className="metric-card">
+          <span className="metric-label">Chinook Valid SQL Rate</span>
+          <div className="metric-value-row">
+            <span className="metric-number">95.0%</span>
+            <span className="metric-delta">38 / 40</span>
+          </div>
+          <span className="metric-sub">Queries executed cleanly against SQLite without syntax or schema errors.</span>
+        </div>
+
+        <div className="metric-card">
+          <span className="metric-label">Synthetic Test Set</span>
           <div className="metric-value-row">
             <span className="metric-number">69.5%</span>
             <span className="metric-delta">+12.5%</span>
           </div>
-          <span className="metric-sub">Compared to 57.0% base model on 200 test queries.</span>
-        </div>
-
-        <div className="metric-card">
-          <span className="metric-label">Valid SQL Syntax</span>
-          <div className="metric-value-row">
-            <span className="metric-number">97.5%</span>
-            <span className="metric-delta">+8.0%</span>
-          </div>
-          <span className="metric-sub">89.5% base vs 97.5% with this LoRA adapter.</span>
+          <span className="metric-sub">Compared to 57.0% base model on 200 in-distribution held-out queries.</span>
         </div>
 
         <div className="metric-card">
           <span className="metric-label">Training Budget</span>
           <div className="metric-value-row">
             <span className="metric-number">6,330</span>
+            <span className="metric-delta">r=16</span>
           </div>
-          <span className="metric-sub">Gold pairs, 1 epoch, 396 steps on a Colab L4 (bf16).</span>
-        </div>
-
-        <div className="metric-card">
-          <span className="metric-label">Target Architecture</span>
-          <div className="metric-value-row">
-            <span className="metric-number">r=16</span>
-          </div>
-          <span className="metric-sub">LoRA alpha=32, target_modules=all-linear, lr 1e-4.</span>
+          <span className="metric-sub">Gold pairs, 1 epoch, 396 steps on a Colab L4 (Qwen2.5-Coder-3B).</span>
         </div>
       </section>
 

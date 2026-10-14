@@ -19,6 +19,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 dev = "sql_llm.runner:run_all"
 sql-llm = "sql_llm.cli:main"
 sql-llm-api = "sql_llm.api:serve"
+sql-llm-eval = "sql_llm.eval_runner:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
