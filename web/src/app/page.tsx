@@ -185,19 +185,19 @@ export default function Home() {
         <div className="metric-card">
           <span className="metric-label">Chinook Execution Accuracy</span>
           <div className="metric-value-row">
-            <span className="metric-number">87.5%</span>
-            <span className="metric-delta">35 / 40</span>
+            <span className="metric-number">77.5%</span>
+            <span className="metric-delta">31 / 40 Strict</span>
           </div>
-          <span className="metric-sub">Exact result set match on 40 curated Chinook questions (zero-shot transfer).</span>
+          <span className="metric-sub">Strict result set match (95% CI: [62.5%, 87.7%], n=40 sample database).</span>
         </div>
 
         <div className="metric-card">
           <span className="metric-label">Chinook Valid SQL Rate</span>
           <div className="metric-value-row">
-            <span className="metric-number">95.0%</span>
-            <span className="metric-delta">38 / 40</span>
+            <span className="metric-number">85.0%</span>
+            <span className="metric-delta">34 / 40</span>
           </div>
-          <span className="metric-sub">Queries executed cleanly against SQLite without syntax or schema errors.</span>
+          <span className="metric-sub">34 of 40 queries executed cleanly against SQLite without syntax or schema errors.</span>
         </div>
 
         <div className="metric-card">

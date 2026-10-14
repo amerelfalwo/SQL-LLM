@@ -1,76 +1,105 @@
 # SQL-LLM — Text-to-SQL Laboratory & Benchmark
 
-A specialized Text-to-SQL system powered by a fine-tuned LoRA adapter ([`amer003100/qwen2.5-coder-3b-text-to-sql-lora`](https://huggingface.co/amer003100/qwen2.5-coder-3b-text-to-sql-lora), built on `Qwen/Qwen2.5-Coder-3B-Instruct`). Translates natural language into verified, executable SQL against the multi-table [Chinook](https://github.com/lerocha/chinook-database) relational database.
+A Text-to-SQL playground and benchmark powered by a fine-tuned LoRA adapter ([`amer003100/qwen2.5-coder-3b-text-to-sql-lora`](https://huggingface.co/amer003100/qwen2.5-coder-3b-text-to-sql-lora), built on `Qwen/Qwen2.5-Coder-3B-Instruct`). Translates natural language questions into verified, executable SQL against the 11-table [Chinook](https://github.com/lerocha/chinook-database) sample relational database.
 
 ---
 
-## 📊 Key Results & Benchmarks
+## 📊 Evaluation & Benchmarks
 
-The benchmark that matters most is performance on an **actual, unseen relational database** (`Chinook_Sqlite.sqlite` — 11 tables with foreign key constraints), not just held-out synthetic test prompts.
+To ensure rigorous evaluation, metrics are separated into two distinct, unmixed benchmarks: the in-distribution test set and a real multi-table sample database.
 
-### 1. Real-World Database Benchmark (Chinook — 40 Curated Questions)
-Evaluated end-to-end on 40 curated questions spanning single-table queries, aggregations, 2-to-4-table JOINs, subqueries, and date manipulations against `data/Chinook_Sqlite.sqlite`. Execution accuracy is measured using the notebook's exact `results_match` protocol (order-insensitive set comparison with float tolerance).
+### 1. In-Distribution Held-Out Test Set (Gretel Synthetic, $n=200$)
+Evaluated on 200 held-out prompts from `gretelai/synthetic_text_to_sql` (SQLite dialect):
 
-| Metric | Result | Context / Details |
-|---|---|---|
-| **Execution Accuracy** | **87.5%** (35 / 40) | Exact result-set match against SQLite ground-truth |
-| **Valid SQL Rate** | **95.0%** (38 / 40) | Syntactically correct & successfully executed by SQLite |
-| **Average Inference Time** | **3.83 s** | Measured on Colab T4 GPU via FastAPI/ngrok |
-| **Evaluated Questions** | **40** | Full spectrum across 11 relational tables |
-
-#### Breakdown by Query Difficulty
-| Difficulty | Total Questions | Exact Match Count | Execution Accuracy |
+| Model Configuration | Valid SQL Rate | Execution Accuracy | Notes |
 |---|---|---|---|
-| **Easy** | 8 | 8 | **100.0%** |
-| **Medium** | 19 | 16 | **84.2%** |
-| **Hard** (Multi-Joins / Subqueries) | 13 | 11 | **84.6%** |
+| **Base Model (`Qwen2.5-Coder-3B-Instruct`)** | 89.5% | 57.0% | Zero-shot prompting |
+| **Fine-Tuned Adapter (LoRA $r=16$)** | **97.5%** (+8.0%) | **69.5%** (+12.5%) | 1 epoch, 6,330 gold pairs |
 
-#### Breakdown by Query Category
-| Category | Questions | Execution Accuracy | Key Patterns Tested |
+---
+
+### 2. Chinook Database Benchmark ($n=40$, Sample Database)
+Evaluated on a curated, quality-gated suite of 40 questions spanning single-table queries, aggregations, 2-to-4-table JOINs, and subqueries against `data/Chinook_Sqlite.sqlite` (sample database, not in the fine-tuning data; $n=40$, 95% Wilson CI $\pm \sim 13$ points).
+
+All 40 questions pass strict automated quality validation (`scripts/validate_benchmark.py`), ensuring complete determinism, absence of ties at LIMIT boundaries, and unambiguous column contracts.
+
+#### Headline Performance (Fine-Tuned Adapter, Full Schema)
+| Metric | Result | 95% Wilson Confidence Interval | Notes |
+|---|---|---|---|
+| **Strict Execution Accuracy** | **77.5%** (31 / 40) | **[62.5%, 87.7%]** | Exact columns, exact positions, result match |
+| **Lenient Execution Accuracy** | **77.5%** (31 / 40) | **[62.5%, 87.7%]** | Permuted / superset column acceptance |
+| **Valid SQL Rate** | **85.0%** (34 / 40) | — | Syntactically correct & executable by SQLite |
+| **End-to-End Latency** | **3.80 s** | — | End-to-end latency via ngrok (Colab T4 GPU) |
+
+#### Difficulty Breakdown ($n=40$)
+| Difficulty | Questions | Strict Match Count | Strict Accuracy | Lenient Accuracy |
+|---|---|---|---|---|
+| **Easy** | 8 | 8 | **100.0%** | 100.0% |
+| **Medium** | 18 | 14 | **77.8%** | 77.8% |
+| **Hard** (Multi-Table JOINs / Subqueries) | 14 | 9 | **64.3%** | 64.3% |
+
+#### Category Breakdown
+| Category | Questions | Strict Accuracy | Key Patterns Tested |
 |---|---|---|---|
 | **Single-Table Aggregations** | 7 | **100.0%** | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
 | **Filter & Sort** | 9 | **100.0%** | `WHERE`, `ORDER BY`, `LIMIT` |
-| **Multi-Table JOINs (3–4 Tables)** | 10 | **90.0%** | `Invoice ⇄ InvoiceLine ⇄ Track ⇄ Album ⇄ Artist` |
-| **Self-Join & Hierarchy** | 1 | **100.0%** | `Employee ⇄ Manager` recursive joins |
 | **Grouping & Having** | 1 | **100.0%** | `GROUP BY ... HAVING COUNT(*) > 5` |
 | **2-Table JOINs** | 8 | **75.0%** | `Artist ⇄ Album`, `Genre ⇄ Track`, `Invoice ⇄ Customer` |
-| **Subqueries & CTEs** | 2 | **50.0%** | Uncorrelated subqueries and membership checks |
-| **Date & Time Operations** | 2 | **50.0%** | Date range filters and year extractions |
+| **Multi-Table JOINs (3–4 Tables)** | 10 | **70.0%** | `Invoice ⇄ InvoiceLine ⇄ Track ⇄ Album ⇄ Artist` |
+| **Date & Time Operations** | 2 | **50.0%** | Year extraction and date filtering |
+| **Subqueries & CTEs** | 2 | **50.0%** | Correlated / uncorrelated subqueries |
+| **Self-Join & Hierarchy** | 1 | **0.0%** | Employee-to-manager recursive join |
 
 ---
 
-### 2. Generalization Comparison: Synthetic vs. Real Database
+### 3. Prompt Schema Ablation Study ($n=40$)
 
-| Evaluation Stage | Dataset Nature | Target Schema | Valid SQL Rate | Execution Accuracy |
+We evaluated the fine-tuned model under three schema representation strategies:
+- **Config A (`full`):** Full DDL schema for all 11 database tables (standard baseline).
+- **Config B (`linked`):** Only tables relevant to the question (max 4, scored by keyword overlap and CamelCase split, plus foreign key neighbors), formatted as compact DDL (`CREATE TABLE Artist (ArtistId INTEGER, Name TEXT);` without noise).
+- **Config C (`linked_rows`):** Config B + 2 sample rows per table formatted as `INSERT INTO Table VALUES (...);`.
+
+| Schema Mode | Strict Accuracy | Lenient Accuracy | Valid SQL Rate | Avg End-to-End Latency (ngrok) |
 |---|---|---|---|---|
-| **Real Database (Chinook)** | Unseen Production Database | 11 Relational Tables | **95.0%** | **87.5%** |
-| **Fine-Tuned Adapter (Held-out)** | Synthetic (`gretelai`) | In-Distribution Prompts | **97.5%** | **69.5%** (+12.5% vs Base) |
-| **Base Model (`Qwen2.5-Coder-3B`)** | Synthetic (`gretelai`) | In-Distribution Prompts | 89.5% | 57.0% |
+| **Config A (`full`)** | **77.5%** (31/40) | 77.5% | 85.0% | 3.80 s |
+| **Config B (`linked`)** | 70.0% (28/40) | 70.0% | 90.0% | 3.62 s |
+| **Config C (`linked_rows`)** | **77.5%** (31/40) | 77.5% | **95.0%** | **3.59 s** |
 
-> **Key Finding:** Eliminating benchmark ambiguity (ties at LIMIT boundaries, dialect concatenation nuances, and unspecified column contracts via `scripts/validate_benchmark.py`) demonstrates that the model achieves **87.5% real-database execution accuracy** and **95.0% valid SQL** across 11 complex tables.
+> **Ablation Finding:** Adding 2 sample rows per table (Config C) reduced prompt token count while boosting Valid SQL Rate to **95.0%** (vs 85.0% in full schema) and tying Full Schema in Strict Execution Accuracy at **77.5%** with the lowest latency (3.59s).
 
 ---
 
-### 3. Automated Benchmark Validation (`scripts/validate_benchmark.py`)
-To ensure benchmark integrity and avoid false negatives, all 40 questions are programmatically validated against `data/Chinook_Sqlite.sqlite`:
-- **Determinism:** Any query with `LIMIT N` must include `ORDER BY` with secondary tiebreakers so row N and row N+1 are never ambiguous ties.
-- **No Hidden Truncation:** Questions asking for "all" rows return the complete result set without arbitrary `LIMIT` clauses.
-- **Explicit Column Contracts:** Prompts specify target columns (`Return only ...`) to prevent dialect-specific `SELECT *` variance.
-- **Non-Empty Ground Truth:** All queries are verified to produce active rows on the SQLite database.
+### 4. Real Failure Mode Analysis
 
-## 🔬 Reproducing the Chinook Benchmark
+From the 9 failed queries in the benchmark results (`data/chinook_eval_lora_full.json`), representative failure modes are classified into standard taxonomies:
 
-To execute the 40-question benchmark suite against your running model and recalculate execution accuracy:
+| Question ID | Category | Question Prompt | Model Prediction (Snippet) | Failure Type | Root Cause |
+|---|---|---|---|---|---|
+| **#16** | 2-Table Join | First 10 albums with artist name | `SELECT a.Title, a.Name FROM Album a ...` | `wrong_table_or_column` | Model omitted joining the `Artist` table inside a subquery; `Album` has no `Name` column. |
+| **#21** | 2-Table Join | Media type used by most tracks | `... ORDER BY TrackCount DESC;` (no LIMIT) | `wrong_logic` | Model omitted `LIMIT 1`, returning all media types instead of only the top one. |
+| **#23** | Multi-Join | Top 5 customers by total spent | `SELECT CustomerId, FirstName ... FROM InvoiceLine JOIN Invoice` | `wrong_table_or_column` | Model omitted joining the `Customer` table when selecting `FirstName` and `LastName`. |
+| **#24** | Multi-Join | Tracks composed by Miles Davis | `FROM Track T JOIN Album A ... JOIN Artist A` | `syntax_or_dialect` | Model assigned alias `A` to both `Album` and `Artist`, triggering `ambiguous column name`. |
+| **#30** | Multi-Join | Items purchased in first 5 invoices | `... WHERE InvoiceId IN (SELECT TOP 5 ...)` | `syntax_or_dialect` | Dialect leak: used SQL Server T-SQL `TOP 5` inside subquery instead of SQLite `LIMIT 5`. |
+| **#32** | Date/Time | Total annual sales revenue | `SELECT YEAR(InvoiceDate) ...` | `syntax_or_dialect` | Dialect leak: used MySQL `YEAR()` instead of SQLite `strftime('%Y', InvoiceDate)`. |
+
+---
+
+### 5. Benchmark Quality Gate (`scripts/validate_benchmark.py`)
+
+All benchmark questions must satisfy automated quality checks enforced by `scripts/validate_benchmark.py` and wrapped in `tests/test_benchmark_quality.py`:
+- **Syntax & Execution:** Gold queries must execute without error on `data/Chinook_Sqlite.sqlite`.
+- **Non-Trivial Results:** Rejects queries returning empty sets (`0 rows`) or trivial single zeros/NULLs (`[(0,)]`, `[(None,)]`).
+- **Determinism:** Any query with `LIMIT N` must include an `ORDER BY` with secondary tiebreakers; flags an error if row $N$ and row $N+1$ share identical sort keys.
+- **No Hidden Truncation:** Prohibits `LIMIT` clauses when the question prompt specifies "all".
+- **Column Specification:** Prompts explicitly specify target columns (`Return only ...`) to prevent ambiguous `SELECT *`.
 
 ```bash
-uv run sql-llm-eval
-```
+# Run the quality validator
+uv run python scripts/validate_benchmark.py
 
-This runs `src/sql_llm/eval_runner.py`:
-1. Executes each question through the model pipeline (`question → schema DDL → generated SQL`).
-2. Executes both the generated SQL and the verified Gold SQL against `data/Chinook_Sqlite.sqlite`.
-3. Compares result sets with `results_match(gold, predicted)`.
-4. Prints the detailed summary table and saves full per-query logs to `data/chinook_evaluation_results.json`.
+# Run quality gate via pytest
+uv run pytest tests/test_benchmark_quality.py
+```
 
 ---
 
@@ -90,93 +119,51 @@ This runs `src/sql_llm/eval_runner.py`:
                                             ▼                                   ▼
                                 ┌───────────────────────┐           ┌───────────────────────┐
                                 │ Local SQLite Database │           │ Remote GPU Inference  │
-                                │ (mode=ro + keyword    │           │ (Colab + ngrok)       │
-                                │  protection guard)    │           │ Qwen2.5-Coder-3B-LoRA │
+                                │ (mode=ro + AST guard  │           │ (Colab + ngrok)       │
+                                │  + progress timeout)  │           │ Qwen2.5-Coder-3B-LoRA │
                                 └───────────────────────┘           └───────────────────────┘
 ```
 
-The system uses a clean separation of concerns:
-- **Local Client / Backend:** Native Python 3.12, strict read-only SQLite connections, FastAPI REST endpoints, and Next.js frontend.
-- **Remote Model Service:** Colab T4/L4 GPU running `colab/server.py` via ngrok tunnel (serving the LoRA adapter without requiring local CUDA hardware).
+---
+
+## 🛡️ Database Execution Security
+
+Execution against SQLite is protected server-side through four independent security layers:
+1. **Engine-Level Read-Only Mode:** SQLite connection opened with `file:...?mode=ro` and reinforced with `PRAGMA query_only=ON;`.
+2. **AST Parsing via SQLGlot:** Parses incoming queries with `sqlglot` (SQLite dialect); strictly accepts only a single `exp.Select` or `exp.Union` statement. Blocks multiple statements, comments injection, and any `exp.Pragma`, `exp.Drop`, `exp.Delete`, `exp.Insert`, or `exp.Update`.
+3. **Execution Timeout Handler:** Configured via `conn.set_progress_handler` checking elapsed time against a deadline (default 3.0 seconds). Automatically aborts runaway queries or infinite recursive CTEs.
+4. **Row Truncation:** Results capped at `max_rows` (default 50 for interactive UI, 1000 for benchmarks).
 
 ---
 
-## 📁 Repository Structure
+## 🔬 Reproducing the Benchmark Runs
 
-```
-SQL-LLM/
-├── colab/
-│   ├── server.py              # Model API (FastAPI + ngrok) running on Colab GPU
-│   └── notebook.ipynb         # Jupyter launcher for server.py
-├── data/
-│   ├── Chinook_Sqlite.sqlite  # 11-table relational SQLite database
-│   └── chinook_evaluation_results.json # Full benchmark results log
-├── src/sql_llm/
-│   ├── config.py              # Environment variables & configuration
-│   ├── database.py            # SQLite wrapper (mode=ro, schema extraction, safe execution)
-│   ├── client.py              # HTTP client for the Colab inference endpoint
-│   ├── service.py             # Pipeline: schema → model → execution → results_match
-│   ├── benchmark_dataset.py   # 40 curated Chinook questions & gold SQL
-│   ├── eval_runner.py         # Automated evaluation harness
-│   ├── examples.py            # Quick example questions for UI and CLI
-│   ├── api.py                 # REST API endpoints (/api/v1/...)
-│   ├── runner.py              # Concurrent launcher (backend + frontend)
-│   └── cli.py                 # Interactive terminal runner
-├── tests/
-│   ├── test_database.py       # DB safety, schemas, and query execution tests
-│   └── test_benchmark.py      # Automated validation of all 40 benchmark questions
-└── web/                       # Next.js frontend (TypeScript, Tailwind, Minimalist UI)
-```
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Python ≥ 3.12 with [uv](https://docs.astral.sh/uv/) installed.
-- Node.js ≥ 20.
-- A free Google Colab account (for GPU execution).
-
-### 1. Launch the Model on Google Colab
-1. Open Google Colab and set **Runtime → Change runtime type → T4 GPU**.
-2. Upload and open [`colab/notebook.ipynb`](colab/notebook.ipynb).
-3. Upload [`colab/server.py`](colab/server.py) and provide your [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken).
-4. Run the notebook cells; copy the public tunnel URL (`https://xxxx.ngrok-free.dev`).
-
-### 2. Configure Environment
-Create a `.env` file in the project root:
-```env
-COLAB_API_URL=https://xxxx.ngrok-free.dev
-```
-
-### 3. Launch with One Command
 ```bash
-uv sync
-uv run dev
+# Full Schema (Config A, Baseline)
+uv run python -m sql_llm.eval_runner --schema-mode full --output data/chinook_eval_lora_full.json
+
+# Linked Compact DDL (Config B)
+uv run python -m sql_llm.eval_runner --schema-mode linked --output data/chinook_eval_lora_linked.json
+
+# Linked Compact DDL + Sample Rows (Config C)
+uv run python -m sql_llm.eval_runner --schema-mode linked_rows --output data/chinook_eval_lora_linked_rows.json
+
+# Base Model (Disable LoRA adapter)
+uv run python -m sql_llm.eval_runner --no-adapter --output data/chinook_eval_base.json
 ```
-This runs the FastAPI backend on `http://localhost:8000` and the Next.js frontend on `http://localhost:3000`.
-
----
-
-## 🛡️ Safety & Execution Security
-
-1. **Strict Read-Only Enforcement:** SQLite connections use URI mode `file:...?mode=ro`, physically preventing any write, update, or schema alteration.
-2. **Statement Blocklist:** All incoming queries are inspected before execution to block state-altering statements (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `ATTACH`, `PRAGMA`).
-3. **Execution Timeouts:** Query execution is guarded with strict timeout boundaries to prevent long-running table lockups.
-4. **Credential Isolation:** API keys and ngrok tokens remain exclusively in local environment files (`.env`), which are permanently git-ignored.
 
 ---
 
 ## 🧪 Testing & Code Quality
 
 ```bash
-# Run all unit tests (DB safety + 40 benchmark gold queries)
+# Run all unit tests (DB safety, AST validator, quality gate, benchmark suite)
 uv run pytest
 
 # Python linter and formatter check
-uv run ruff check src tests
+uv run ruff check src tests scripts
 
 # Frontend TypeScript check
 cd web && npx tsc --noEmit
 ```
-All 57 unit tests pass with zero warnings.
+All 64 tests pass with zero warnings.
